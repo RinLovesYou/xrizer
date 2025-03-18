@@ -11,13 +11,16 @@ use crate::{
 use log::{debug, info, trace};
 use openvr as vr;
 use openxr as xr;
-use std::mem::offset_of;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
     Arc, Mutex,
 };
 use std::time::Instant;
 use std::{ffi::c_char, ops::Deref};
+use std::{mem::offset_of, sync::atomic::AtomicBool};
+
+static SUSPEND_RENDERING: AtomicBool = AtomicBool::new(false);
+static FADE_TO_GRID: AtomicBool = AtomicBool::new(false);
 
 #[derive(Default)]
 pub struct CompositorSessionData(Mutex<Option<DynFrameController>>);
@@ -330,8 +333,8 @@ impl vr::IVRCompositor028_Interface for Compositor {
     ) -> vr::EVRCompositorError {
         todo!()
     }
-    fn SuspendRendering(&self, _bSuspend: bool) {
-        crate::warn_unimplemented!("SuspendRendering");
+    fn SuspendRendering(&self, bSuspend: bool) {
+        SUSPEND_RENDERING.store(bSuspend, Ordering::Relaxed);
     }
     fn ForceReconnectProcess(&self) {
         todo!()
@@ -377,21 +380,49 @@ impl vr::IVRCompositor028_Interface for Compositor {
         crate::warn_unimplemented!("CompositorBringToFront");
     }
     fn ClearSkyboxOverride(&self) {
-        crate::warn_unimplemented!("ClearSkyboxOverride");
+        if let Some(overlays) = self.overlays.get() {
+            overlays.clear_skybox();
+        }
     }
     fn SetSkyboxOverride(
         &self,
-        _pTextures: *const vr::Texture_t,
-        _unTextureCount: u32,
+        pTextures: *const vr::Texture_t,
+        unTextureCount: u32,
     ) -> vr::EVRCompositorError {
-        crate::warn_unimplemented!("SetSkyboxOverride");
+        let Some(overlays) = self.overlays.get() else {
+            return vr::EVRCompositorError::RequestFailed;
+        };
+        if pTextures.is_null() {
+            return vr::EVRCompositorError::RequestFailed;
+        }
+        match unTextureCount {
+            1..=2 => {
+                if !self
+                    .openxr
+                    .enabled_extensions
+                    .khr_composition_layer_equirect2
+                {
+                    log::info!("Could not set skybox: khr_composition_layer_equirect2 unsupported");
+                    return vr::EVRCompositorError::None;
+                }
+                log::debug!("Setting new equirect skybox");
+            }
+            6 => {
+                log::debug!("Setting new box skybox");
+            }
+            _ => return vr::EVRCompositorError::RequestFailed,
+        }
+
+        let textures = unsafe { std::slice::from_raw_parts(pTextures, unTextureCount as _) };
+        overlays.set_skybox(&self.openxr.session_data.get(), textures);
+
         vr::EVRCompositorError::None
     }
     fn GetCurrentGridAlpha(&self) -> f32 {
         0.0
     }
-    fn FadeGrid(&self, _fSeconds: f32, _bFadeGridIn: bool) {
-        crate::warn_unimplemented!("FadeGrid");
+    fn FadeGrid(&self, _fSeconds: f32, bFadeGridIn: bool) {
+        FADE_TO_GRID.store(bFadeGridIn, Ordering::Relaxed);
     }
     fn GetCurrentFadeColor(&self, _bBackground: bool) -> vr::HmdColor_t {
         todo!()
@@ -859,7 +890,8 @@ impl<G: GraphicsBackend> FrameController<G> {
             tracy_span!("wait frame");
             self.waiter.wait().unwrap()
         };
-        self.should_render = frame_state.should_render;
+        self.should_render =
+            frame_state.should_render && !SUSPEND_RENDERING.load(Ordering::Relaxed);
         {
             tracy_span!("begin frame");
             self.stream.begin().unwrap();
@@ -965,12 +997,12 @@ impl<G: GraphicsBackend> FrameController<G> {
         self.image_acquired = false;
 
         let mut proj_layer_views = Vec::new();
+
         if self.should_render {
             let crate::system::ViewData { flags, views } =
                 system.get_views(session_data.current_origin_as_reference_space());
-
             proj_layer_views = views
-                .into_iter()
+                .iter()
                 .enumerate()
                 .map(|(eye_index, view)| {
                     let pose = xr::Posef {
@@ -1027,7 +1059,9 @@ impl<G: GraphicsBackend> FrameController<G> {
         }
         let overlay_layers;
         if let Some(overlay_man) = overlays {
-            overlay_layers = overlay_man.get_layers(session_data);
+            let render_skybox = FADE_TO_GRID.load(Ordering::Relaxed);
+
+            overlay_layers = overlay_man.get_layers(session_data, render_skybox);
             layers.extend(overlay_layers.iter().map(Deref::deref));
         }
 
