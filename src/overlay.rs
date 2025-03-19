@@ -39,6 +39,10 @@ impl OverlayMan {
     }
 
     pub fn set_skybox(&self, session: &SessionData, textures: &[vr::Texture_t]) {
+        // We don't yet follow HMD position, so the skybox needs to be
+        // big enough so that the user never leaves it
+        const SKYBOX_SIZE: f32 = 50.0;
+
         self.clear_skybox();
 
         let mut overlays = self.overlays.write().unwrap();
@@ -52,7 +56,7 @@ impl OverlayMan {
                 let overlay = overlays.get_mut(key).unwrap();
                 overlay.set_texture(key, session, *textures.first().unwrap());
                 overlay.visible = true;
-                overlay.width = 50.0; // for equirect this becomes radius
+                overlay.width = SKYBOX_SIZE; // for equirect this becomes radius
                 overlay.kind = OverlayKind::Sphere;
                 overlay.z_order = SKYBOX_Z_ORDER;
                 skybox.push(key);
@@ -65,34 +69,34 @@ impl OverlayMan {
                     let overlay = overlays.get_mut(key).unwrap();
                     overlay.set_texture(key, session, *texture);
                     overlay.visible = true;
-                    overlay.width = 100.0;
+                    overlay.width = SKYBOX_SIZE * 2.0;
                     overlay.kind = OverlayKind::Quad;
                     overlay.z_order = SKYBOX_Z_ORDER;
 
                     #[rustfmt::skip]
                     const QUAD_POSES: [xr::Posef; 6] = [
                         xr::Posef { // front
-                            position: xr::Vector3f { x: 0.0, y: 0.0, z: -50.0 },
+                            position: xr::Vector3f { x: 0.0, y: 0.0, z: -SKYBOX_SIZE },
                             orientation: xr::Quaternionf { x: 0.0, y: 0.0, z: 1.0, w: 0.0 },
                         },
                         xr::Posef { // back
-                            position: xr::Vector3f { x: 0.0, y: 0.0, z: 50.0 },
+                            position: xr::Vector3f { x: 0.0, y: 0.0, z: SKYBOX_SIZE },
                             orientation: xr::Quaternionf { x: 1.0, y: 0.0, z: 0.0, w: 0.0 },
                         },
                         xr::Posef { // left
-                            position: xr::Vector3f { x: -50.0, y: 0.0, z: 0.0 },
+                            position: xr::Vector3f { x: -SKYBOX_SIZE, y: 0.0, z: 0.0 },
                             orientation: xr::Quaternionf { x: FRAC_1_SQRT_2, y: 0.0, z: FRAC_1_SQRT_2, w: 0.0 },
                         },
                         xr::Posef { // right
-                            position: xr::Vector3f { x: 50.0, y: 0.0, z: 0.0 },
+                            position: xr::Vector3f { x: SKYBOX_SIZE, y: 0.0, z: 0.0 },
                             orientation: xr::Quaternionf { x: -FRAC_1_SQRT_2, y: 0.0, z: FRAC_1_SQRT_2, w: 0.0 },
                         },
                         xr::Posef { // up
-                            position: xr::Vector3f { x: 0.0, y: 50.0, z: 0.0 },
+                            position: xr::Vector3f { x: 0.0, y: SKYBOX_SIZE, z: 0.0 },
                             orientation: xr::Quaternionf {x: 0.0, y: -FRAC_1_SQRT_2, z: FRAC_1_SQRT_2, w: 0.0 },
                         },
                         xr::Posef { // down
-                            position: xr::Vector3f { x: 0.0, y: -50.0, z: 0.0 },
+                            position: xr::Vector3f { x: 0.0, y: -SKYBOX_SIZE, z: 0.0 },
                             orientation: xr::Quaternionf {x: 0.0, y: FRAC_1_SQRT_2, z: FRAC_1_SQRT_2, w: 0.0 },
                         },
                     ];
@@ -172,18 +176,42 @@ impl OverlayMan {
                     orientation: xr::Quaternionf::IDENTITY,
                 });
 
-            let subimage = xr::SwapchainSubImage::new()
-                .image_array_index(vr::EVREye::Left as u32)
-                .swapchain(swapchain)
-                .image_rect(rect);
-
-            match overlay.kind {
-                OverlayKind::Quad => {
-                    let layer = xr::CompositionLayerQuad::new()
+            macro_rules! layer_init {
+                ($ty:ident) => {{
+                    $ty::new()
                         .space(space)
                         .layer_flags(xr::CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA)
                         .eye_visibility(xr::EyeVisibility::BOTH)
-                        .sub_image(subimage)
+                        .sub_image(
+                            xr::SwapchainSubImage::new()
+                                .image_array_index(vr::EVREye::Left as u32)
+                                .swapchain(swapchain)
+                                .image_rect(rect),
+                        )
+                }};
+            }
+
+            macro_rules! lifetime_extend {
+                ($ty:ident, $layer:expr) => {{
+                    fn lifetime_extend<'a, 'b: 'a, G: xr::Graphics>(
+                        layer: $ty<'a, G>,
+                    ) -> $ty<'b, G> {
+                        // SAFETY: We need to remove the lifetimes to be able to return this layer.
+                        // Internally, CompositionLayerQuad is using the raw OpenXR handles and PhantomData, not actual
+                        // references, so returning it as long as we can guarantee the lifetimes of the space and
+                        // swapchain is fine. Both of these are derived from the SessionData,
+                        // so we should have no lifetime problems.
+                        unsafe { $ty::from_raw(layer.into_raw()) }
+                    }
+
+                    lifetime_extend($layer)
+                }}
+            }
+
+            match overlay.kind {
+                OverlayKind::Quad => {
+                    use xr::CompositionLayerQuad;
+                    let layer = layer_init!(CompositionLayerQuad)
                         .pose(pose)
                         .size(xr::Extent2Df {
                             width: overlay.width,
@@ -191,18 +219,7 @@ impl OverlayMan {
                                 / rect.extent.width as f32,
                         });
 
-                    fn lifetime_extend<'a, 'b: 'a, G: xr::Graphics>(
-                        layer: xr::CompositionLayerQuad<'a, G>,
-                    ) -> xr::CompositionLayerQuad<'b, G> {
-                        // SAFETY: We need to remove the lifetimes to be able to return this layer.
-                        // Internally, CompositionLayerQuad is using the raw OpenXR handles and PhantomData, not actual
-                        // references, so returning it as long as we can guarantee the lifetimes of the space and
-                        // swapchain is fine. Both of these are derived from the SessionData,
-                        // so we should have no lifetime problems.
-                        unsafe { xr::CompositionLayerQuad::from_raw(layer.into_raw()) }
-                    }
-
-                    let layer = lifetime_extend(layer);
+                    let layer = lifetime_extend!(CompositionLayerQuad, layer);
                     layers.push((overlay.z_order, OverlayLayer::Quad(layer)));
                 }
                 // SetOverlayCurvature checks for khr_composition_layer_cylinder
@@ -219,16 +236,8 @@ impl OverlayMan {
                     let center = pos + rot.mul_vec3(Vec3::Z * radius);
                     let angle = 2.0 * (overlay.width / (2.0 * radius));
 
-                    let layer = xr::CompositionLayerCylinderKHR::new()
-                        .space(space)
-                        .layer_flags(xr::CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA)
-                        .eye_visibility(xr::EyeVisibility::BOTH)
-                        .sub_image(
-                            xr::SwapchainSubImage::new()
-                                .image_array_index(vr::EVREye::Left as u32)
-                                .swapchain(swapchain)
-                                .image_rect(rect),
-                        )
+                    use xr::CompositionLayerCylinderKHR;
+                    let layer = layer_init!(CompositionLayerCylinderKHR)
                         .radius(radius)
                         .central_angle(angle)
                         .aspect_ratio(rect.extent.height as f32 / rect.extent.width as f32)
@@ -241,14 +250,7 @@ impl OverlayMan {
                             },
                         });
 
-                    fn lifetime_extend<'a, 'b: 'a, G: xr::Graphics>(
-                        layer: xr::CompositionLayerCylinderKHR<'a, G>,
-                    ) -> xr::CompositionLayerCylinderKHR<'b, G> {
-                        // SAFETY: See other lifetime_extend above
-                        unsafe { xr::CompositionLayerCylinderKHR::from_raw(layer.into_raw()) }
-                    }
-
-                    let layer = lifetime_extend(layer);
+                    let layer = lifetime_extend!(CompositionLayerCylinderKHR, layer);
                     layers.push((overlay.z_order, OverlayLayer::Cylinder(layer)));
                 }
                 // SetSkyboxOverride checks for khr_composition_layer_equirect2
@@ -257,30 +259,15 @@ impl OverlayMan {
                     const VERTICAL_RAD_HIGH: f32 = 0.5 * PI;
                     const VERTICAL_RAD_LOW: f32 = -0.5 * PI;
 
-                    let layer = xr::CompositionLayerEquirect2KHR::new()
-                        .space(space)
-                        .layer_flags(xr::CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA)
-                        .eye_visibility(xr::EyeVisibility::BOTH)
-                        .sub_image(
-                            xr::SwapchainSubImage::new()
-                                .image_array_index(vr::EVREye::Left as u32)
-                                .swapchain(swapchain)
-                                .image_rect(rect),
-                        )
+                    use xr::CompositionLayerEquirect2KHR;
+                    let layer = layer_init!(CompositionLayerEquirect2KHR)
                         .radius(overlay.width)
                         .central_horizontal_angle(HORIZONTAL_RAD)
                         .upper_vertical_angle(VERTICAL_RAD_HIGH)
                         .lower_vertical_angle(VERTICAL_RAD_LOW)
                         .pose(pose);
 
-                    fn lifetime_extend<'a, 'b: 'a, G: xr::Graphics>(
-                        layer: xr::CompositionLayerEquirect2KHR<'a, G>,
-                    ) -> xr::CompositionLayerEquirect2KHR<'b, G> {
-                        // SAFETY: See other lifetime_extend above
-                        unsafe { xr::CompositionLayerEquirect2KHR::from_raw(layer.into_raw()) }
-                    }
-
-                    let layer = lifetime_extend(layer);
+                    let layer = lifetime_extend!(CompositionLayerEquirect2KHR, layer);
                     layers.push((overlay.z_order, OverlayLayer::Equirect2(layer)));
                 }
             }
@@ -562,7 +549,7 @@ impl vr::IVROverlay027_Interface for OverlayMan {
         get_overlay!(self, handle, mut overlay);
 
         debug!("setting overlay {:?} alpha to {alpha}", overlay.name);
-        overlay.alpha = alpha;
+        overlay.alpha = alpha.clamp(0.0, 1.0);
         vr::EVROverlayError::None
     }
 
@@ -1036,8 +1023,16 @@ impl vr::IVROverlay027_Interface for OverlayMan {
         crate::warn_unimplemented!("SetOverlayTexelAspect");
         vr::EVROverlayError::None
     }
-    fn GetOverlayAlpha(&self, _: vr::VROverlayHandle_t, _: *mut f32) -> vr::EVROverlayError {
-        todo!()
+    fn GetOverlayAlpha(
+        &self,
+        handle: vr::VROverlayHandle_t,
+        value: *mut f32,
+    ) -> vr::EVROverlayError {
+        get_overlay!(self, handle, overlay);
+        unsafe {
+            *value = overlay.alpha;
+        }
+        vr::EVROverlayError::None
     }
 
     fn GetOverlayColor(

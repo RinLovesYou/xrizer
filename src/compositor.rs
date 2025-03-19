@@ -11,16 +11,13 @@ use crate::{
 use log::{debug, info, trace};
 use openvr as vr;
 use openxr as xr;
+use std::mem::offset_of;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
     Arc, Mutex,
 };
 use std::time::Instant;
 use std::{ffi::c_char, ops::Deref};
-use std::{mem::offset_of, sync::atomic::AtomicBool};
-
-static SUSPEND_RENDERING: AtomicBool = AtomicBool::new(false);
-static FADE_TO_GRID: AtomicBool = AtomicBool::new(false);
 
 #[derive(Default)]
 pub struct CompositorSessionData(Mutex<Option<DynFrameController>>);
@@ -334,7 +331,23 @@ impl vr::IVRCompositor028_Interface for Compositor {
         todo!()
     }
     fn SuspendRendering(&self, bSuspend: bool) {
-        SUSPEND_RENDERING.store(bSuspend, Ordering::Relaxed);
+        #[macros::any_graphics(DynFrameController)]
+        fn set_suspend_render<G: GraphicsBackend + 'static>(
+            ctrl: &mut FrameController<G>,
+            app_suspend_render: bool,
+        ) {
+            ctrl.app_suspend_render = app_suspend_render;
+        }
+
+        self.openxr
+            .session_data
+            .get()
+            .comp_data
+            .0
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .for_each(|ctrl| ctrl.with_any_graphics_mut::<set_suspend_render>(bSuspend));
     }
     fn ForceReconnectProcess(&self) {
         todo!()
@@ -389,9 +402,10 @@ impl vr::IVRCompositor028_Interface for Compositor {
         pTextures: *const vr::Texture_t,
         unTextureCount: u32,
     ) -> vr::EVRCompositorError {
-        let Some(overlays) = self.overlays.get() else {
-            return vr::EVRCompositorError::RequestFailed;
-        };
+        let overlays = self.overlays.get().unwrap_or_else(|| {
+            self.overlays
+                .force(|_| OverlayMan::new(self.openxr.clone()))
+        });
         if pTextures.is_null() {
             return vr::EVRCompositorError::RequestFailed;
         }
@@ -410,7 +424,10 @@ impl vr::IVRCompositor028_Interface for Compositor {
             6 => {
                 log::debug!("Setting new box skybox");
             }
-            _ => return vr::EVRCompositorError::RequestFailed,
+            _ => {
+                log::warn!("Invalid number of skybox textures: {}", unTextureCount);
+                return vr::EVRCompositorError::RequestFailed;
+            }
         }
 
         let textures = unsafe { std::slice::from_raw_parts(pTextures, unTextureCount as _) };
@@ -422,7 +439,23 @@ impl vr::IVRCompositor028_Interface for Compositor {
         0.0
     }
     fn FadeGrid(&self, _fSeconds: f32, bFadeGridIn: bool) {
-        FADE_TO_GRID.store(bFadeGridIn, Ordering::Relaxed);
+        #[macros::any_graphics(DynFrameController)]
+        fn set_fade_grid<G: GraphicsBackend + 'static>(
+            ctrl: &mut FrameController<G>,
+            app_fade_grid: bool,
+        ) {
+            ctrl.app_fade_grid = app_fade_grid;
+        }
+
+        self.openxr
+            .session_data
+            .get()
+            .comp_data
+            .0
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .for_each(|ctrl| ctrl.with_any_graphics_mut::<set_fade_grid>(bFadeGridIn));
     }
     fn GetCurrentFadeColor(&self, _bBackground: bool) -> vr::HmdColor_t {
         todo!()
@@ -739,6 +772,8 @@ struct FrameController<G: GraphicsBackend> {
     image_index: usize,
     image_acquired: bool,
     should_render: bool,
+    app_suspend_render: bool,
+    app_fade_grid: bool,
     eyes_submitted: [Option<SubmittedEye>; 2],
     submitting_null: bool,
     backend: G,
@@ -822,6 +857,8 @@ impl<G: GraphicsBackend> FrameController<G> {
             image_index: 0,
             image_acquired: false,
             should_render: false,
+            app_suspend_render: false,
+            app_fade_grid: false,
             eyes_submitted: Default::default(),
             submitting_null: false,
             backend,
@@ -890,8 +927,7 @@ impl<G: GraphicsBackend> FrameController<G> {
             tracy_span!("wait frame");
             self.waiter.wait().unwrap()
         };
-        self.should_render =
-            frame_state.should_render && !SUSPEND_RENDERING.load(Ordering::Relaxed);
+        self.should_render = frame_state.should_render && !self.app_suspend_render;
         {
             tracy_span!("begin frame");
             self.stream.begin().unwrap();
@@ -1002,7 +1038,7 @@ impl<G: GraphicsBackend> FrameController<G> {
             let crate::system::ViewData { flags, views } =
                 system.get_views(session_data.current_origin_as_reference_space());
             proj_layer_views = views
-                .iter()
+                .into_iter()
                 .enumerate()
                 .map(|(eye_index, view)| {
                     let pose = xr::Posef {
@@ -1059,9 +1095,7 @@ impl<G: GraphicsBackend> FrameController<G> {
         }
         let overlay_layers;
         if let Some(overlay_man) = overlays {
-            let render_skybox = FADE_TO_GRID.load(Ordering::Relaxed);
-
-            overlay_layers = overlay_man.get_layers(session_data, render_skybox);
+            overlay_layers = overlay_man.get_layers(session_data, self.app_fade_grid);
             layers.extend(overlay_layers.iter().map(Deref::deref));
         }
 
