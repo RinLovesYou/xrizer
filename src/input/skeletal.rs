@@ -169,7 +169,6 @@ impl<C: openxr_data::Compositor> Input<C> {
 
     pub(super) fn get_bone_summary_from_hand_tracking(
         &self,
-        xr_data: &OpenXrData<C>,
         session_data: &SessionData,
         summary_type: vr::EVRSummaryType,
         summary_data: *mut vr::VRSkeletalSummaryData_t,
@@ -178,11 +177,14 @@ impl<C: openxr_data::Compositor> Input<C> {
     ) {
         let legacy = session_data.input_data.legacy_actions.get().unwrap();
         let display_time = self.openxr.display_time.get();
+        let devices = self.devices.read().unwrap();
+        let controller = devices.get_controller(hand.into());
+
         let Some(raw) = match hand {
             Hand::Left => &legacy.left_spaces,
             Hand::Right => &legacy.right_spaces,
         }
-        .try_get_or_init_raw(xr_data, session_data, &legacy.actions) else {
+        .try_get_or_init_raw(&controller.get_interaction_profile(), session_data, &legacy.actions) else {
             self.get_estimated_bone_summary(session_data, summary_type, summary_data, hand);
             return;
         };
