@@ -5,6 +5,7 @@ use crate::{
         devices::tracked_device::{TrackedDevice, TrackedDeviceType},
         Profiles,
     },
+    runtime_extensions::mndx_xdev_space::{XdevSpaceExtension, XR_MNDX_XDEV_SPACE_EXTENSION_NAME},
 };
 use derive_more::{Deref, From, TryInto};
 use glam::f32::{Quat, Vec3};
@@ -39,6 +40,7 @@ pub struct OpenXrData<C: Compositor> {
     pub session_data: SessionReadGuard,
     pub display_time: AtomicXrTime,
     pub enabled_extensions: xr::ExtensionSet,
+    pub xdev_extension: Option<XdevSpaceExtension>,
 
     /// should only be externally accessed for testing
     pub(crate) input: Injected<crate::input::Input<C>>,
@@ -90,6 +92,14 @@ impl<C: Compositor> OpenXrData<C> {
         exts.khr_visibility_mask = supported_exts.khr_visibility_mask;
         exts.khr_composition_layer_cylinder = supported_exts.khr_composition_layer_cylinder;
 
+        if supported_exts
+            .other
+            .contains(&XR_MNDX_XDEV_SPACE_EXTENSION_NAME.to_string())
+        {
+            exts.other
+                .push(XR_MNDX_XDEV_SPACE_EXTENSION_NAME.to_string());
+        }
+
         let instance = entry
             .create_instance(
                 &xr::ApplicationInfo {
@@ -116,6 +126,8 @@ impl<C: Compositor> OpenXrData<C> {
             .0,
         )));
 
+        let xdev_extension = XdevSpaceExtension::new(&instance).ok();
+
         Ok(Self {
             _entry: entry,
             instance,
@@ -123,6 +135,7 @@ impl<C: Compositor> OpenXrData<C> {
             session_data,
             display_time: AtomicXrTime(1.into()),
             enabled_extensions: exts,
+            xdev_extension,
             input: injector.inject(),
             compositor: injector.inject(),
         })
@@ -144,7 +157,7 @@ impl<C: Compositor> OpenXrData<C> {
 
                     let xr_input = self.input.get().unwrap();
 
-                    let devices = xr_input.devices.read().unwrap();
+                    let mut devices = xr_input.devices.write().unwrap();
 
                     for hand in [TrackedDeviceType::LeftHand, TrackedDeviceType::RightHand] {
                         let controller = devices.get_controller(hand);
@@ -185,6 +198,8 @@ impl<C: Compositor> OpenXrData<C> {
                             controller.hand_path, profile_name
                         )
                     }
+
+                    devices.create_generic_trackers(self).unwrap();
                 }
                 _ => {
                     info!("unknown event");
@@ -204,6 +219,10 @@ impl<C: Compositor> OpenXrData<C> {
             .expect("Session is being restarted, but compositor has not been set up!");
 
         let info = comp.get_session_create_info(std::mem::take(&mut session_guard.comp_data));
+
+        if let Some(input) = self.input.get() {
+            input.pre_session_restart();
+        }
 
         // We need to destroy the old session before creating the new one.
         let _ = unsafe { ManuallyDrop::take(&mut *session_guard) };

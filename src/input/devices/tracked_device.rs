@@ -14,6 +14,9 @@ use crate::{
     openxr_data::{AtomicPath, Hand, OpenXrData, SessionData},
 };
 
+//HMD, Left Controller, and Right Controller are reserved for the first 3 device indices.
+pub const RESERVED_DEVICE_INDECES: u32 = 3;
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 #[allow(dead_code)]
 pub enum TrackedDeviceType {

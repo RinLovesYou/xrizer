@@ -241,6 +241,7 @@ pub(super) enum ControllerType {
     ViveController,
     Knuckles,
     OculusTouch,
+    ViveTracker,
     #[serde(untagged)]
     Unknown(String),
 }

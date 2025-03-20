@@ -2,6 +2,7 @@ pub mod knuckles;
 pub mod oculus_touch;
 pub mod simple_controller;
 pub mod vive_controller;
+pub mod vive_tracker;
 
 use super::{
     action_manifest::ControllerType, legacy::LegacyBindings, skeletal::SkeletalInputBindings,
@@ -102,6 +103,7 @@ impl Profiles {
                 (ControllerType::Knuckles, &Knuckles),
                 (ControllerType::OculusTouch, &Touch),
                 (ControllerType::ViveController, &SimpleController),
+                (ControllerType::ViveTracker, &vive_tracker::ViveTracker),
             ],
         };
         &P

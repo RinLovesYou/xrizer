@@ -11,6 +11,7 @@ mod openxr_data;
 mod overlay;
 mod overlayview;
 mod rendermodels;
+mod runtime_extensions;
 mod screenshots;
 mod settings;
 mod system;

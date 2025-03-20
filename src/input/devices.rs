@@ -1,7 +1,8 @@
 use controller::XrController;
 use enum_dispatch::enum_dispatch;
+use generic_tracker::XrGenericTracker;
 use hmd::XrHMD;
-use tracked_device::{BaseDevice, TrackedDevice, TrackedDeviceType};
+use tracked_device::{BaseDevice, TrackedDevice, TrackedDeviceType, RESERVED_DEVICE_INDECES};
 
 use openvr as vr;
 use openxr as xr;
@@ -9,9 +10,11 @@ use openxr as xr;
 use crate::{
     input::InteractionProfile,
     openxr_data::{OpenXrData, SessionData},
+    runtime_extensions::mndx_xdev_space::Xdev,
 };
 
 pub mod controller;
+pub mod generic_tracker;
 pub mod hmd;
 pub mod tracked_device;
 
@@ -21,6 +24,7 @@ pub mod tracked_device;
 pub enum TrackedDeviceContainer {
     HMD(XrHMD),
     Controller(XrController),
+    GenericTracker(XrGenericTracker),
 }
 
 pub struct TrackedDeviceList {
@@ -45,6 +49,10 @@ impl TrackedDeviceList {
                 XrController::new(xr_instance, TrackedDeviceType::RightHand).into(),
             ],
         }
+    }
+
+    pub fn push(&mut self, device: TrackedDeviceContainer) {
+        self.devices.push(device);
     }
 
     pub fn get_device(
@@ -123,5 +131,44 @@ impl TrackedDeviceList {
 
     pub fn len(&self) -> usize {
         self.devices.len()
+    }
+
+    pub fn truncate(&mut self, len: usize) {
+        self.devices.truncate(len);
+    }
+
+    pub fn create_generic_trackers(
+        &mut self,
+        xr_data: &OpenXrData<impl crate::openxr_data::Compositor>,
+    ) -> xr::Result<()> {
+        if xr_data.xdev_extension.is_none() {
+            return Ok(());
+        }
+
+        let xdev_extension = xr_data.xdev_extension.as_ref().unwrap();
+
+        log::info!("Creating generic trackers");
+
+        let session = xr_data.session_data.get();
+
+        let xdevs: Vec<Xdev> = xdev_extension
+            .enumerate_xdevs(&session.session)?
+            .into_iter()
+            .filter(|device| {
+                device.space.is_some()
+                    && device.properties.name().to_lowercase().contains("tracker")
+            })
+            .collect();
+
+        log::info!("Found {} generic trackers", xdevs.len());
+
+        self.truncate(RESERVED_DEVICE_INDECES as usize);
+
+        xdevs.into_iter().for_each(|xdev| {
+            let tracker = XrGenericTracker::new(self.len() as u32, xdev);
+            self.push(tracker.into());
+        });
+
+        Ok(())
     }
 }
