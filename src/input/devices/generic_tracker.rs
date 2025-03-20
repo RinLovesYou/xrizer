@@ -4,10 +4,10 @@ use openxr as xr;
 use crate::{input::Profiles, runtime_extensions::mndx_xdev_space::Xdev};
 
 use super::tracked_device::{
-    BaseDevice, TrackedDevice, TrackedDeviceType, RESERVED_DEVICE_INDECES,
+    BaseDevice, TrackedDevice, TrackedDeviceType, RESERVED_DEVICE_INDICES,
 };
 
-pub const MAX_GENERIC_TRACKERS: u32 = vr::k_unMaxTrackedDeviceCount - RESERVED_DEVICE_INDECES;
+pub const MAX_GENERIC_TRACKERS: u32 = vr::k_unMaxTrackedDeviceCount - RESERVED_DEVICE_INDICES;
 
 pub struct XrGenericTracker {
     base: BaseDevice,
@@ -19,7 +19,7 @@ pub struct XrGenericTracker {
 impl XrGenericTracker {
     pub fn new(index: vr::TrackedDeviceIndex_t, dev: Xdev) -> Self {
         assert!(
-            index >= RESERVED_DEVICE_INDECES,
+            index >= RESERVED_DEVICE_INDICES,
             "Generic Tracker created with a reserved device index {}",
             index
         );
