@@ -2,7 +2,7 @@ use controller::XrController;
 use enum_dispatch::enum_dispatch;
 use generic_tracker::XrGenericTracker;
 use hmd::XrHMD;
-use tracked_device::{BaseDevice, TrackedDevice, TrackedDeviceType, RESERVED_DEVICE_INDECES};
+use tracked_device::{BaseDevice, TrackedDevice, TrackedDeviceType, RESERVED_DEVICE_INDICES};
 
 use openvr as vr;
 use openxr as xr;
@@ -162,7 +162,7 @@ impl TrackedDeviceList {
 
         log::info!("Found {} generic trackers", xdevs.len());
 
-        self.truncate(RESERVED_DEVICE_INDECES as usize);
+        self.truncate(RESERVED_DEVICE_INDICES as usize);
 
         xdevs.into_iter().for_each(|xdev| {
             let tracker = XrGenericTracker::new(self.len() as u32, xdev);

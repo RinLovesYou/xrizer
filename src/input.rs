@@ -10,7 +10,7 @@ pub mod devices;
 mod tests;
 
 use devices::tracked_device::TrackedDevice;
-use devices::tracked_device::RESERVED_DEVICE_INDECES;
+use devices::tracked_device::RESERVED_DEVICE_INDICES;
 use devices::TrackedDeviceList;
 use profiles::MainAxisType;
 pub use profiles::{InteractionProfile, Profiles};
@@ -1346,7 +1346,7 @@ impl<C: openxr_data::Compositor> Input<C> {
         // Generic Trackers hold on to Spaces, which are tied to the current Session, so we need to
         // remove them, dropping those spaces, which would now belong to an invalid session
         if let Some(mut devices) = self.devices.write().ok() {
-            devices.truncate(RESERVED_DEVICE_INDECES as usize);
+            devices.truncate(RESERVED_DEVICE_INDICES as usize);
         }
     }
 
