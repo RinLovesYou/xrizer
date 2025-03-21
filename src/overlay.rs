@@ -180,7 +180,8 @@ impl OverlayMan {
                 ($ty:ident) => {{
                     $ty::new()
                         .space(space)
-                        .layer_flags(xr::CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA)
+                        .layer_flags(xr::CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA
+                            | xr::CompositionLayerFlags::UNPREMULTIPLIED_ALPHA)
                         .eye_visibility(xr::EyeVisibility::BOTH)
                         .sub_image(
                             xr::SwapchainSubImage::new()
