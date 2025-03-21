@@ -184,7 +184,11 @@ impl<C: openxr_data::Compositor> Input<C> {
             Hand::Left => &legacy.left_spaces,
             Hand::Right => &legacy.right_spaces,
         }
-        .try_get_or_init_raw(&controller.get_interaction_profile(), session_data, &legacy.actions) else {
+        .try_get_or_init_raw(
+            &controller.get_interaction_profile(),
+            session_data,
+            &legacy.actions,
+        ) else {
             self.get_estimated_bone_summary(session_data, summary_type, summary_data, hand);
             return;
         };
@@ -205,6 +209,8 @@ impl<C: openxr_data::Compositor> Input<C> {
                 )
             })
             .collect();
+
+        let legacy_hand_state = self.get_finger_state(session_data, hand);
 
         let mut finger_curls = [0.0; 5];
         let finger_splay = [0.2; 4];
@@ -255,7 +261,15 @@ impl<C: openxr_data::Compositor> Input<C> {
                 1.0 - (ang / PI)
             };
 
-            *curl_value = curl;
+            let skeletal_level = self.skeletal_tracking_level.read().unwrap();
+
+            // HACK: use estimated thumb on index to fix gestures
+            if i == 0 && *skeletal_level == vr::EVRSkeletalTrackingLevel::Partial {
+                *curl_value = legacy_hand_state.thumb;
+            } else {
+                *curl_value = curl;
+
+            }
         }
 
         unsafe {
