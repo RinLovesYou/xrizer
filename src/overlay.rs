@@ -550,7 +550,7 @@ impl vr::IVROverlay027_Interface for OverlayMan {
         get_overlay!(self, handle, mut overlay);
 
         debug!("setting overlay {:?} alpha to {alpha}", overlay.name);
-        overlay.alpha = alpha.clamp(0.0, 1.0);
+        overlay.alpha = alpha.clamp(0.5, 1.0);
         vr::EVROverlayError::None
     }
 
