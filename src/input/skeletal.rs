@@ -213,6 +213,7 @@ impl<C: openxr_data::Compositor> Input<C> {
 
         let mut finger_curls = [0.0; 5];
         let finger_splay = [0.2; 4];
+        crate::warn_once!("finger splay hardcoded to 0.2");
 
         for (i, curl_value) in finger_curls.iter_mut().enumerate() {
             let (metacarpal, proximal, tip) = match i {

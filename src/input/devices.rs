@@ -166,7 +166,6 @@ impl XrTrackedDevice {
                     vr::ETrackedDeviceProperty::SerialNumber_String => {
                         let serial = self.xdev.as_ref()?.get_or_init_serial();
 
-                        log::info!("Serial: {:?}", serial.to_str().ok()?);
 
                         Some(serial)
                     }
